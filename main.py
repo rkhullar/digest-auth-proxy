@@ -1,4 +1,6 @@
 import os
+from collections.abc import Callable
+from typing import Awaitable
 from urllib.parse import urljoin
 
 import httpx
@@ -9,7 +11,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 app = FastAPI()
 security = HTTPBasic()
 
-base_url = 'https://cloud.mongodb.com/api/atlas/v1.0/'
+base_url = os.environ['BASE_URL']
 allowed_http_methods = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']
 
 
@@ -18,7 +20,8 @@ async def proxy(uri: str, request: Request, credentials: HTTPBasicCredentials = 
     digest_auth = httpx.DigestAuth(credentials.username, credentials.password)
     # NOTE: uri = request.path_params['uri']; but need param for swagger page
     url = urljoin(base_url, uri)
-    response = await async_httpx(method=request.method, url=url, auth=digest_auth, params=request.query_params)
+    proxy_params = {key: await read_object(request, key) for key in ['json']}
+    response = await async_httpx(method=request.method, url=url, auth=digest_auth, params=request.query_params, **proxy_params)
     return Response(
         status_code=response.status_code,
         content=response.text,
@@ -29,6 +32,19 @@ async def proxy(uri: str, request: Request, credentials: HTTPBasicCredentials = 
 async def async_httpx(*args, **kwargs):
     async with httpx.AsyncClient() as client:
         return await client.request(*args, **kwargs)
+
+
+async def read_object(request: Request, _type: str, raise_error: bool = False):
+    try:
+        result = getattr(request, _type)
+        if isinstance(result, Callable):
+            result = result()
+        if isinstance(result, Awaitable):
+            result = await result
+        return result
+    except Exception as err:
+        if raise_error:
+            raise err
 
 
 if __name__ == '__main__':
